@@ -1,0 +1,154 @@
+{
+    "AWSTemplateFormatVersion" : "2010-09-09",
+    "Resources" : {
+        "myDistribution" : {
+            "Type" : "AWS::CloudFront::Distribution",
+            "Properties" : {
+                "DistributionConfig" : {
+                    "Origins" : [ {
+                        "DomainName" : "rgiastest.s3.amazonaws.com",
+                        "Id" : "myS3Origin",
+                        "S3OriginConfig" : {
+                            "OriginAccessIdentity" : "origin-access-identity/cloudfront/E127EXAMPLE51Z"
+                        }
+                    }],
+                    "Enabled" : "true",
+                    "Comment" : "Some comment",
+                    "DefaultRootObject" : "index.html",
+                    "Logging" : {
+                        "IncludeCookies" : "false",
+                        "Bucket" : "rgiastest.s3.amazonaws.com"
+                    },
+                    "DefaultCacheBehavior" : {
+                        "AllowedMethods" : [ "POST" ],
+                        "TargetOriginId" : "myS3Origin",
+                        "ForwardedValues" : {
+                            "QueryString" : "false",
+                            "Cookies" : { "Forward" : "none" }
+                        },
+                        "TrustedSigners" : [ "1234567890EX", "1234567891EX" ],
+                        "ViewerProtocolPolicy" : "allow-all"
+                    },
+                   "PriceClass" : "PriceClass_100",
+                   "Restrictions" : {
+                       "GeoRestriction" : {
+                           "RestrictionType" : "whitelist",
+                           "Locations" : [ "AQ", "CV" ]
+                       }
+                   },
+                   "ViewerCertificate" : { "CloudFrontDefaultCertificate" : "true" }
+                }
+            }
+        },
+        "Bucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+              "VersioningConfiguration": {
+                "Status": "Enabled"
+              }
+            }
+        },
+        "LambdaKinesisRole": {
+          "Type": "AWS::IAM::Role",
+          "Properties": {
+            "RoleName": "kinesis-lambda-role",
+            "Path": "/",
+            "AssumeRolePolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": [
+                      "lambda.amazonaws.com",
+                      "edgelambda.amazonaws.com"
+                    ]
+                  },
+                  "Action": [
+                    "sts:AssumeRole"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "DeliveryRole": {
+          "Type": "AWS::IAM::Role",
+          "Properties": {
+            "AssumeRolePolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "",
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": "firehose.amazonaws.com"
+                  },
+                  "Action": "sts:AssumeRole",
+                  "Condition": {
+                    "StringEquals": {
+                      "sts:ExternalId": {"Ref":"AWS::AccountId"}
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+       "DeliveryPolicy": {
+          "Type": "AWS::IAM::Policy",
+          "Properties": {
+            "PolicyName": "firehose_delivery_policy",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:AbortMultipartUpload",
+                    "s3:GetBucketLocation",
+                    "s3:GetObject",
+                    "s3:ListBucket",
+                    "s3:ListBucketMultipartUploads",
+                    "s3:PutObject"
+                  ],
+                  "Resource": [
+                    {"Fn::Join": ["", ["arn:aws:s3:::", {"Ref":"s3bucket"}]]},
+                    {"Fn::Join": ["", ["arn:aws:s3:::", {"Ref":"s3bucket"}, "*"]]}
+                  ]
+                }
+              ]
+            },
+            "Roles": [{"Ref": "DeliveryRole"}]
+          }
+        },
+        "FirehoseDeliveryStream" : {
+            "DependsOn": ["DeliveryPolicy"],
+            "Type": "AWS::KinesisFirehose::DeliveryStream",
+            "Properties": {
+              "ExtendedS3DestinationConfiguration": {
+                "BucketARN": {"Fn::Join": ["", ["arn:aws:s3:::", {"Ref":"s3bucket"}]]},
+                "BufferingHints": {
+                  "IntervalInSeconds": "60",
+                  "SizeInMBs": "50"
+                },
+                "CompressionFormat": "UNCOMPRESSED",
+                "Prefix": "firehose/",
+                "RoleARN": {"Fn::GetAtt" : ["DeliveryRole", "Arn"] },
+                "ProcessingConfiguration" : {
+                  "Enabled": "true",
+                  "Processors": [
+                  {
+                    "Parameters": [
+                    {
+                      "ParameterName": "LambdaArn",
+                      "ParameterValue": {"Fn::GetAtt" : ["myLambda", "Arn"] }
+                    }],
+                    "Type": "Lambda"
+                  }]
+                }
+              }
+            }
+        },
+    }
+}
